@@ -6,10 +6,15 @@ from PyQt5.QtCore import Qt
 import vtk
 from vtk.qt.QVTKRenderWindowInteractor import QVTKRenderWindowInteractor
 
+# VTPViewer: A PyQt5 + VTK application for viewing 3D VTP files and interactively slicing them.
+# - Shows a 3D view and three orthogonal 2D slice views (XY, XZ, YZ).
+# - Lets user open a .vtp file, then interactively move slice planes using sliders.
+# - Slices are shown in both 3D and 2D views, with intersection point marked.
+# - Uses QVTKRenderWindowInteractor for embedding VTK in PyQt5 widgets.
 
 class SliceViewerWidget(QWidget):
     """ A QWidget for displaying a 2D slice view. """
-    def __init__(self, view_axis, parent=None):
+    def __init__(self, view_axis, label_text, color=[1, 1, 1], parent=None):
         super().__init__(parent)
 
         # --- VTK Components ---
@@ -32,24 +37,32 @@ class SliceViewerWidget(QWidget):
             camera.SetPosition(0, 0, 1)
             camera.SetViewUp(0, 1, 0)
             
-        interactor_style = vtk.vtkInteractorStyleImage()
+        interactor_style = vtk.vtkInteractorStyleImage() # changing directions and scales
         self.vtk_widget.GetRenderWindow().GetInteractor().SetInteractorStyle(interactor_style)
 
         # --- Layout ---
         layout = QVBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
+        
+        # Add a label for the plane name
+        self.label = QLabel(label_text)
+        self.label.setAlignment(Qt.AlignCenter)
+        self.label.setStyleSheet("color: white; background-color: rgba(40, 40, 40, 180); padding: 2px;")
+        layout.addWidget(self.label)
+        
         layout.addWidget(self.vtk_widget)
         self.setLayout(layout)
 
-        # --- Data Actor ---
+        # --- Data Actor (3d model) ---
         self.actor = vtk.vtkActor()
-        self.actor.GetProperty().SetColor(1, 1, 1)
+        self.actor.GetProperty().SetColor(color)
         self.actor.GetProperty().SetLineWidth(2)
         self.renderer.AddActor(self.actor)
         
     def update_data(self, polydata):
         if polydata and polydata.GetNumberOfPoints() > 0:
             mapper = vtk.vtkPolyDataMapper()
+            mapper.ScalarVisibilityOff()
             mapper.SetInputData(polydata)
             self.actor.SetMapper(mapper)
             self.renderer.ResetCamera()
@@ -59,6 +72,7 @@ class SliceViewerWidget(QWidget):
         self.vtk_widget.GetRenderWindow().Render()
         
 
+# Main window class for the VTP Viewer application
 class VTPViewer(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -92,9 +106,9 @@ class VTPViewer(QMainWindow):
 
         # Right panel for all 2D views (vertical layout)
         right_panel_layout = QVBoxLayout()
-        self.slice_widget_xy = SliceViewerWidget('z') # XY Plane
-        self.slice_widget_xz = SliceViewerWidget('y') # XZ Plane
-        self.slice_widget_yz = SliceViewerWidget('x') # YZ Plane
+        self.slice_widget_xy = SliceViewerWidget('z', "XY Plane", color=[0, 0, 1])
+        self.slice_widget_xz = SliceViewerWidget('y', "XZ Plane", color=[0, 1, 0])
+        self.slice_widget_yz = SliceViewerWidget('x', "YZ Plane", color=[1, 0, 0])
         right_panel_layout.addWidget(self.slice_widget_xy)
         right_panel_layout.addWidget(self.slice_widget_xz)
         right_panel_layout.addWidget(self.slice_widget_yz)
@@ -162,6 +176,7 @@ class VTPViewer(QMainWindow):
     def create_slice_actor(self, cutter, color):
         mapper = vtk.vtkPolyDataMapper()
         mapper.SetInputConnection(cutter.GetOutputPort())
+        mapper.ScalarVisibilityOff()
         actor = vtk.vtkActor()
         actor.SetMapper(mapper)
         actor.GetProperty().SetColor(color)
@@ -223,7 +238,7 @@ class VTPViewer(QMainWindow):
 
         x_range, y_range, z_range = self.bounds[1]-self.bounds[0], self.bounds[3]-self.bounds[2], self.bounds[5]-self.bounds[4]
         x = self.bounds[0] + x_range * self.slider_x.value() / 1000.0
-        y = a = self.bounds[2] + y_range * self.slider_y.value() / 1000.0
+        y = self.bounds[2] + y_range * self.slider_y.value() / 1000.0
         z = self.bounds[4] + z_range * self.slider_z.value() / 1000.0
         
         self.label_x.setText(f"{x:.2f}")
@@ -246,11 +261,6 @@ class VTPViewer(QMainWindow):
         self.slice_widget_xy.update_data(self.cutter_z.GetOutput())
 
     def closeEvent(self, event):
-        """
-        重写关闭事件，确保在退出前正确释放VTK资源。
-        """
-        # --- 这是解决关闭报错的关键 ---
-        # 显式地告诉每个VTK交互器窗口去终止和清理资源
         if hasattr(self, 'vtk_widget_3d') and self.vtk_widget_3d:
             self.vtk_widget_3d.Finalize()
 
@@ -262,12 +272,10 @@ class VTPViewer(QMainWindow):
 
         if hasattr(self, 'slice_widget_yz') and self.slice_widget_yz:
             self.slice_widget_yz.vtk_widget.Finalize()
-        # --- 关键代码结束 ---
-
-        # 调用父类的closeEvent，让窗口正常关闭
         super().closeEvent(event)
 
 
+# Main code to run the application
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     window = VTPViewer()

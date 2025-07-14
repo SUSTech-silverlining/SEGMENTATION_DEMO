@@ -13,7 +13,6 @@ class ContourInteractorStyle(vtk.vtkInteractorStyleImage):
     def __init__(self, parent_viewer=None):
         super().__init__()
         self.parent_viewer = parent_viewer
-        print("Interactor style set for ContourInteractorStyle")
 
         # 用 AddObserver 绑定左键事件，保证事件捕获
         self.AddObserver("LeftButtonPressEvent", self.on_left_button_press)
@@ -154,7 +153,7 @@ class VTIViewer(QMainWindow):
         self.setCentralWidget(self.central_widget)
         self.main_layout = QVBoxLayout(self.central_widget)
 
-        # --- 顶部控制区 ---
+        # === 顶部控制区 ===
         top_controls_layout = QHBoxLayout()
         self.open_btn = QPushButton("Open VTI File")
         self.open_btn.clicked.connect(self.open_vti)
@@ -169,13 +168,40 @@ class VTIViewer(QMainWindow):
         top_controls_layout.addStretch()
         self.main_layout.addLayout(top_controls_layout)
 
-        # --- 视图区 (2x2 网格布局) ---
+        # === 视图区 (2x2 网格) ===
         views_layout = QGridLayout()
-        self.slice_widget_axial = ImageSliceViewerWidget('z', parent_viewer=self) # 左上
-        self.slice_widget_coronal = ImageSliceViewerWidget('y', parent_viewer=self) # 右上
-        self.slice_widget_sagittal = ImageSliceViewerWidget('x', parent_viewer=self) # 左下
-        
-        # 3D 视图 (右下)
+
+        # 2D Axial 视图（左上）
+        self.slice_widget_axial = ImageSliceViewerWidget('z', parent_viewer=self)
+        axial_group = QWidget()
+        axial_layout = QVBoxLayout(axial_group)
+        axial_layout.setContentsMargins(0, 0, 0, 0)
+        axial_label = QLabel("Axial (Z)")
+        axial_label.setAlignment(Qt.AlignHCenter)
+        axial_layout.addWidget(axial_label)
+        axial_layout.addWidget(self.slice_widget_axial)
+
+        # 2D Coronal 视图（右上）
+        self.slice_widget_coronal = ImageSliceViewerWidget('y', parent_viewer=self)
+        coronal_group = QWidget()
+        coronal_layout = QVBoxLayout(coronal_group)
+        coronal_layout.setContentsMargins(0, 0, 0, 0)
+        coronal_label = QLabel("Coronal (Y)")
+        coronal_label.setAlignment(Qt.AlignHCenter)
+        coronal_layout.addWidget(coronal_label)
+        coronal_layout.addWidget(self.slice_widget_coronal)
+
+        # 2D Sagittal 视图（左下）
+        self.slice_widget_sagittal = ImageSliceViewerWidget('x', parent_viewer=self)
+        sagittal_group = QWidget()
+        sagittal_layout = QVBoxLayout(sagittal_group)
+        sagittal_layout.setContentsMargins(0, 0, 0, 0)
+        sagittal_label = QLabel("Sagittal (X)")
+        sagittal_label.setAlignment(Qt.AlignHCenter)
+        sagittal_layout.addWidget(sagittal_label)
+        sagittal_layout.addWidget(self.slice_widget_sagittal)
+
+        # 3D视图（右下）
         self.vtk_widget_3d = QVTKRenderWindowInteractor()
         self.renderer_3d = vtk.vtkRenderer()
         self.renderer_3d.SetBackground(0.2, 0.3, 0.4)
@@ -183,23 +209,35 @@ class VTIViewer(QMainWindow):
         self.interactor_3d = self.vtk_widget_3d.GetRenderWindow().GetInteractor()
         self.interactor_3d.SetInteractorStyle(vtk.vtkInteractorStyleTrackballCamera())
 
-        views_layout.addWidget(self.slice_widget_axial, 0, 0)
-        views_layout.addWidget(self.slice_widget_coronal, 0, 1)
-        views_layout.addWidget(self.slice_widget_sagittal, 1, 0)
+        # === 添加小坐标轴到3D窗口 ===
+        axes_actor = vtk.vtkAxesActor()
+        self.orientation_marker = vtk.vtkOrientationMarkerWidget()
+        self.orientation_marker.SetOrientationMarker(axes_actor)
+        self.orientation_marker.SetInteractor(self.interactor_3d)
+        self.orientation_marker.SetViewport(0.8, 0.0, 1.0, 0.2)  # 右下角 20% 区域
+        self.orientation_marker.SetEnabled(1)
+        self.orientation_marker.InteractiveOff()
+
+        # === 将各视图组装到网格 ===
+        views_layout.addWidget(axial_group,    0, 0)
+        views_layout.addWidget(coronal_group,  0, 1)
+        views_layout.addWidget(sagittal_group, 1, 0)
         views_layout.addWidget(self.vtk_widget_3d, 1, 1)
         self.main_layout.addLayout(views_layout)
 
-        # --- 3D视图中的切面对象 ---
+        # 3D视图中的切面对象（你原有代码保留）
         self.image_slice_3d_axial = vtk.vtkImageSlice()
         self.image_slice_3d_coronal = vtk.vtkImageSlice()
         self.image_slice_3d_sagittal = vtk.vtkImageSlice()
-        
-        # --- 底部滑块控制区 ---
+
+        # === 底部滑块控制区 ===
         self.setup_controls_ui()
         self.main_layout.addWidget(self.controls_group)
 
+        # 初始化交互器
         self.slice_widget_axial.vtk_widget.GetRenderWindow().GetInteractor().Initialize()
         self.vtk_widget_3d.GetRenderWindow().GetInteractor().Initialize()
+
 
     def setup_controls_ui(self):
         """创建滑块控制面板。"""
@@ -349,48 +387,50 @@ class VTIViewer(QMainWindow):
             # 保留已完成的轮廓显示，不清空actor
 
     def add_contour_point(self, pos):
-        """向当前轮廓添加一个点，并实时更新闭合轮廓。"""
+        """向当前轮廓添加一个点，并实时更新平滑闭合轮廓。"""
         if not self.is_drawing or not self.current_contour_points:
             return
-        
+
         self.current_contour_points.InsertNextPoint(pos)
-        
-        polydata2d = self.polydata_2d
         num_points = self.current_contour_points.GetNumberOfPoints()
-        
+
         if num_points < 2:
-            # 只有一个点，不画任何线或面
-            polydata2d.SetLines(vtk.vtkCellArray())
-            polydata2d.SetPolys(vtk.vtkCellArray())
-        elif num_points == 2:
-            # 两个点，画线段
-            line = vtk.vtkLine()
-            line.GetPointIds().SetId(0, 0)
-            line.GetPointIds().SetId(1, 1)
-            lines = vtk.vtkCellArray()
-            lines.InsertNextCell(line)
-            polydata2d.SetLines(lines)
-            polydata2d.SetPolys(vtk.vtkCellArray())
+            # 少于2个点不渲染
+            self.polydata_2d.SetPoints(self.current_contour_points)
+            self.polydata_2d.SetLines(vtk.vtkCellArray())
+            self.polydata_2d.SetPolys(vtk.vtkCellArray())
         else:
-            # 3个及以上点，画闭合多边形
-            polygon = vtk.vtkPolygon()
-            polygon.GetPointIds().SetNumberOfIds(num_points)
+            # ==== 核心部分：实时平滑闭合曲线 ====
+            # 1. 用ParametricSpline插值（自动闭合）
+            spline = vtk.vtkParametricSpline()
+            points_for_spline = vtk.vtkPoints()
+
+            # 先收集原始点，再补上首点实现闭合
             for i in range(num_points):
-                polygon.GetPointIds().SetId(i, i)
-            polys = vtk.vtkCellArray()
-            polys.InsertNextCell(polygon)
-            polydata2d.SetPolys(polys)
-            polydata2d.SetLines(vtk.vtkCellArray())
+                points_for_spline.InsertNextPoint(self.current_contour_points.GetPoint(i))
+            points_for_spline.InsertNextPoint(self.current_contour_points.GetPoint(0))  # 闭合
 
-        polydata2d.Modified()
+            spline.SetPoints(points_for_spline)
+            splineSource = vtk.vtkParametricFunctionSource()
+            splineSource.SetParametricFunction(spline)
+            splineSource.SetUResolution(200)   # 插值点数，越大越平滑
+            splineSource.Update()
 
-        # 3D数据用DeepCopy同步2D数据
-        self.polydata_3d.DeepCopy(polydata2d)
+            # 2. 将插值结果（折线）copy到polydata_2d
+            self.polydata_2d.ShallowCopy(splineSource.GetOutput())
+            # 保证点集也是插值后的点（仅用于显示，原始点用 self.current_contour_points 保留）
+
+        self.polydata_2d.Modified()
+
+        # 3D视图同步显示
+        self.polydata_3d.DeepCopy(self.polydata_2d)
         self.polydata_3d.Modified()
 
         # 触发渲染刷新
         self.slice_widget_axial.vtk_widget.GetRenderWindow().Render()
         self.vtk_widget_3d.GetRenderWindow().Render()
+
+
 
 
     def clear_current_contour(self):
@@ -411,6 +451,9 @@ class VTIViewer(QMainWindow):
             self.draw_btn.setChecked(False)
             self.toggle_drawing(False)
 
+
+# 禁止vtkOutputWindow弹窗
+vtk.vtkObject.GlobalWarningDisplayOff()
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

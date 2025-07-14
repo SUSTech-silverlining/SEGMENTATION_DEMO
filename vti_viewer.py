@@ -33,6 +33,49 @@ class ContourInteractorStyle(vtk.vtkInteractorStyleImage):
 
         self.OnLeftButtonDown()  # 让基类继续处理事件
 
+# ==============================================================================
+# 自定义交互方式，用于在2D视图中平移
+# ==============================================================================
+class PanWithMiddleButtonInteractorStyle(vtk.vtkInteractorStyleImage):
+    def __init__(self, parent=None):
+        super().__init__()
+        self.AddObserver("MiddleButtonPressEvent", self.start_pan)
+        self.AddObserver("MiddleButtonReleaseEvent", self.end_pan)
+        self.AddObserver("MouseMoveEvent", self.pan_move)
+        self.panning = False
+        self.last_pos = None
+
+    def start_pan(self, obj, event):
+        self.panning = True
+        self.last_pos = self.GetInteractor().GetEventPosition()
+        self.OnMiddleButtonDown()
+
+    def end_pan(self, obj, event):
+        self.panning = False
+        self.last_pos = None
+        self.OnMiddleButtonUp()
+
+    def pan_move(self, obj, event):
+        if self.panning:
+            interactor = self.GetInteractor()
+            new_pos = interactor.GetEventPosition()
+            dx = new_pos[0] - self.last_pos[0]
+            dy = new_pos[1] - self.last_pos[1]
+            renderer = self.GetDefaultRenderer()
+            camera = renderer.GetActiveCamera()
+            factor = 0.5  # 平移灵敏度
+            camera.SetFocalPoint(camera.GetFocalPoint()[0] - dx * factor,
+                                 camera.GetFocalPoint()[1] + dy * factor,
+                                 camera.GetFocalPoint()[2])
+            camera.SetPosition(camera.GetPosition()[0] - dx * factor,
+                               camera.GetPosition()[1] + dy * factor,
+                               camera.GetPosition()[2])
+            renderer.ResetCameraClippingRange()
+            interactor.Render()
+            self.last_pos = new_pos
+        self.OnMouseMove()
+
+
 
 # ==============================================================================
 # 用于显示2D图像切片的控件 (已重构)
@@ -63,13 +106,14 @@ class ImageSliceViewerWidget(QWidget):
         camera = self.renderer.GetActiveCamera()
         camera.SetParallelProjection(True)
 
-        if view_axis == 'z': # Axial
-            self.interactor_style = ContourInteractorStyle(parent_viewer)
-            self.interactor_style.SetDefaultRenderer(self.renderer)  # 关键补充
-        else: # Coronal, Sagittal
-            self.interactor_style = vtk.vtkInteractorStyleImage()
-        
-        self.vtk_widget.GetRenderWindow().GetInteractor().SetInteractorStyle(self.interactor_style)
+    if view_axis == 'z': # Axial
+        self.interactor_style = ContourInteractorStyle(parent_viewer)
+        self.interactor_style.SetDefaultRenderer(self.renderer)
+    else:
+        self.interactor_style = PanWithMiddleButtonInteractorStyle()
+        self.interactor_style.SetDefaultRenderer(self.renderer)
+
+
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -347,6 +391,19 @@ class VTIViewer(QMainWindow):
     def toggle_drawing(self, checked):
         """切换绘制模式。"""
         self.is_drawing = checked
+        
+        # === 关键代码：动态切换交互风格 ===
+        interactor = self.slice_widget_axial.vtk_widget.GetRenderWindow().GetInteractor()
+        if self.is_drawing:
+            # 进入绘制模式——切换为点选风格
+            contour_style = ContourInteractorStyle(parent_viewer=self)
+            contour_style.SetDefaultRenderer(self.slice_widget_axial.renderer)
+            interactor.SetInteractorStyle(contour_style)
+        else:
+            pan_style = PanWithMiddleButtonInteractorStyle()
+            pan_style.SetDefaultRenderer(self.slice_widget_axial.renderer)
+            interactor.SetInteractorStyle(pan_style)
+
         if self.is_drawing:
             self.draw_btn.setText("Finish Drawing")
             self.current_contour_points = vtk.vtkPoints()

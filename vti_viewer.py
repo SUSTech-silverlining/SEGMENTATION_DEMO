@@ -65,10 +65,10 @@ class PanWithMiddleButtonInteractorStyle(vtk.vtkInteractorStyleImage):
             camera = renderer.GetActiveCamera()
             factor = 0.5  # 平移灵敏度
             camera.SetFocalPoint(camera.GetFocalPoint()[0] - dx * factor,
-                                 camera.GetFocalPoint()[1] + dy * factor,
+                                 camera.GetFocalPoint()[1] - dy * factor,
                                  camera.GetFocalPoint()[2])
             camera.SetPosition(camera.GetPosition()[0] - dx * factor,
-                               camera.GetPosition()[1] + dy * factor,
+                               camera.GetPosition()[1] - dy * factor,
                                camera.GetPosition()[2])
             renderer.ResetCameraClippingRange()
             interactor.Render()
@@ -106,14 +106,12 @@ class ImageSliceViewerWidget(QWidget):
         camera = self.renderer.GetActiveCamera()
         camera.SetParallelProjection(True)
 
-    if view_axis == 'z': # Axial
-        self.interactor_style = ContourInteractorStyle(parent_viewer)
-        self.interactor_style.SetDefaultRenderer(self.renderer)
-    else:
-        self.interactor_style = PanWithMiddleButtonInteractorStyle()
-        self.interactor_style.SetDefaultRenderer(self.renderer)
-
-
+        if view_axis == 'z': # Axial
+            self.interactor_style = ContourInteractorStyle(parent_viewer)
+            self.interactor_style.SetDefaultRenderer(self.renderer)
+        else:
+            self.interactor_style = PanWithMiddleButtonInteractorStyle()
+            self.interactor_style.SetDefaultRenderer(self.renderer)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -487,6 +485,27 @@ class VTIViewer(QMainWindow):
         self.slice_widget_axial.vtk_widget.GetRenderWindow().Render()
         self.vtk_widget_3d.GetRenderWindow().Render()
 
+        # 渲染小方块（例如正方体或小球）
+        cube = vtk.vtkCubeSource()
+        size = 0.1  # cube边长，根据spacing调
+        cube.SetCenter(*pos)
+        cube.SetXLength(size)
+        cube.SetYLength(size)
+        cube.SetZLength(size)
+        cube.Update()
+
+        cube_mapper = vtk.vtkPolyDataMapper()
+        cube_mapper.SetInputConnection(cube.GetOutputPort())
+        cube_actor = vtk.vtkActor()
+        cube_actor.SetMapper(cube_mapper)
+        cube_actor.GetProperty().SetColor(1, 0, 0)  # 红色
+
+        self.slice_widget_axial.renderer.AddActor(cube_actor)
+        self.contour_point_actors_2d.append(cube_actor)
+
+        self.slice_widget_axial.vtk_widget.GetRenderWindow().Render()
+
+
 
 
 
@@ -507,6 +526,11 @@ class VTIViewer(QMainWindow):
         if self.is_drawing:
             self.draw_btn.setChecked(False)
             self.toggle_drawing(False)
+        
+        for actor in getattr(self, 'contour_point_actors_2d', []):
+            self.slice_widget_axial.renderer.RemoveActor(actor)
+        self.contour_point_actors_2d = []
+
 
 
 # 禁止vtkOutputWindow弹窗
@@ -527,4 +551,3 @@ if __name__ == "__main__":
     interactor.Start()  # 激活 VTK 事件循环
 
     sys.exit(app.exec_())
-

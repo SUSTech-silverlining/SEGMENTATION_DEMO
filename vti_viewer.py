@@ -297,6 +297,11 @@ class VTIViewer(QMainWindow):
         self.slice_widget_axial.vtk_widget.GetRenderWindow().GetInteractor().Initialize()
         self.vtk_widget_3d.GetRenderWindow().GetInteractor().Initialize()
 
+        # 保存每个切片的contour对象
+        self.axial_contours_per_slice = {}  # key: slice_index, value: dict with keys: points, actor2d, actor3d, etc.
+        self.current_axial_slice = None     # 当前显示的axial切片
+
+
 
     def setup_controls_ui(self):
         """创建滑块控制面板。"""
@@ -384,33 +389,63 @@ class VTIViewer(QMainWindow):
         self.update_slices()
 
     def update_slices(self):
-        """根据滑块的值更新所有视图。"""
-        if not self.image_data: return
-        
+        if not self.image_data:
+            return
+
+        prev_axial = getattr(self, "current_axial_slice", None)
         axial_slice = self.slider_axial.value()
         coronal_slice = self.slider_coronal.value()
         sagittal_slice = self.slider_sagittal.value()
+        self.current_axial_slice = axial_slice
 
+        # --------- 1. 2D窗口只隐藏上一个slice的contour和cube ---------
+        if prev_axial is not None:
+            contour_list = self.axial_contours_per_slice.get(prev_axial, [])
+            for contour_info in contour_list:
+                if contour_info.get('actor2d'):
+                    self.slice_widget_axial.renderer.RemoveActor(contour_info['actor2d'])
+                for cube in contour_info.get('cube_actors', []):
+                    self.slice_widget_axial.renderer.RemoveActor(cube)
+        # 3D窗口什么都不做（不要remove）
+
+        # --------- 2. 切片渲染更新 ---------
         self.slice_widget_axial.set_slice(axial_slice)
         self.slice_widget_coronal.set_slice(coronal_slice)
         self.slice_widget_sagittal.set_slice(sagittal_slice)
-        
-        # 更新3D视图中的切面位置
+
+        # --------- 3. 2D窗口只add当前slice的contour和cube ---------
+        contour_list = self.axial_contours_per_slice.get(axial_slice, [])
+        for contour_info in contour_list:
+            if contour_info.get('actor2d'):
+                self.slice_widget_axial.renderer.AddActor(contour_info['actor2d'])
+            for cube in contour_info.get('cube_actors', []):
+                self.slice_widget_axial.renderer.AddActor(cube)
+        # 3D窗口什么都不做（actor已经永久add过了）
+
+        # --------- 4. 其它视图和label ---------
+        self.label_axial.setText(str(axial_slice))
+        self.label_coronal.setText(str(coronal_slice))
+        self.label_sagittal.setText(str(sagittal_slice))
+
         self.image_slice_3d_axial.GetMapper().SetSliceNumber(axial_slice)
         self.image_slice_3d_coronal.GetMapper().SetSliceNumber(coronal_slice)
         self.image_slice_3d_sagittal.GetMapper().SetSliceNumber(sagittal_slice)
-        
-        self.renderer_3d.ResetCamera()
+
+        self.renderer_3d.ResetCameraClippingRange()
+        self.slice_widget_axial.vtk_widget.GetRenderWindow().Render()
+        self.slice_widget_coronal.vtk_widget.GetRenderWindow().Render()
+        self.slice_widget_sagittal.vtk_widget.GetRenderWindow().Render()
         self.vtk_widget_3d.GetRenderWindow().Render()
+
+
+
 
     def toggle_drawing(self, checked):
         """切换绘制模式。"""
         self.is_drawing = checked
-        
-        # === 关键代码：动态切换交互风格 ===
+
         interactor = self.slice_widget_axial.vtk_widget.GetRenderWindow().GetInteractor()
         if self.is_drawing:
-            # 进入绘制模式——切换为点选风格
             contour_style = ContourInteractorStyle(parent_viewer=self)
             contour_style.SetDefaultRenderer(self.slice_widget_axial.renderer)
             interactor.SetInteractorStyle(contour_style)
@@ -422,14 +457,13 @@ class VTIViewer(QMainWindow):
         if self.is_drawing:
             self.draw_btn.setText("Finish Drawing")
             self.current_contour_points = vtk.vtkPoints()
-        
-            # 新建一个独立的polydata管理点和拓扑
+            self.current_contour_cubes = []  # <--- 新增：用于存储当前轮廓的小方块actors
+
             self.polydata_2d = vtk.vtkPolyData()
             self.polydata_2d.SetPoints(self.current_contour_points)
             self.polydata_2d.SetLines(vtk.vtkCellArray())
             self.polydata_2d.SetPolys(vtk.vtkCellArray())
 
-            # 2D视图mapper和actor
             mapper2d = vtk.vtkPolyDataMapper()
             mapper2d.SetInputData(self.polydata_2d)
             self.current_contour_actor_2d = vtk.vtkActor()
@@ -439,7 +473,6 @@ class VTIViewer(QMainWindow):
             self.current_contour_actor_2d.PickableOff()
             self.slice_widget_axial.renderer.AddActor(self.current_contour_actor_2d)
 
-            # 3D视图用独立polydata，初始拷贝一份2D数据（空）
             self.polydata_3d = vtk.vtkPolyData()
             self.polydata_3d.DeepCopy(self.polydata_2d)
 
@@ -447,16 +480,29 @@ class VTIViewer(QMainWindow):
             mapper3d.SetInputData(self.polydata_3d)
             self.current_contour_actor_3d = vtk.vtkActor()
             self.current_contour_actor_3d.SetMapper(mapper3d)
-            self.current_contour_actor_3d.GetProperty().SetColor(1, 1, 0)  # 黄色
+            self.current_contour_actor_3d.GetProperty().SetColor(1, 1, 0)
             self.current_contour_actor_3d.GetProperty().SetLineWidth(2)
             self.renderer_3d.AddActor(self.current_contour_actor_3d)
 
         else:
             self.draw_btn.setText("Start Drawing Contour")
             if self.current_contour_points and self.current_contour_points.GetNumberOfPoints() > 0:
-                self.contours.append(self.current_contour_points)
+                # --------- 多contour存储 ----------
+                if self.current_axial_slice not in self.axial_contours_per_slice:
+                    self.axial_contours_per_slice[self.current_axial_slice] = []
+                self.axial_contours_per_slice[self.current_axial_slice].append({
+                    'points': self.current_contour_points,
+                    'actor2d': self.current_contour_actor_2d,
+                    'actor3d': self.current_contour_actor_3d,
+                    'cube_actors': self.current_contour_cubes,  # <--- 新增
+                })
             self.current_contour_points = None
-            # 保留已完成的轮廓显示，不清空actor
+            self.current_contour_actor_2d = None
+            self.current_contour_actor_3d = None
+            self.current_contour_cubes = []  # <--- 新增
+
+
+
 
     def add_contour_point(self, pos):
         """向当前轮廓添加一个点，并实时更新平滑闭合轮廓。"""
@@ -467,44 +513,29 @@ class VTIViewer(QMainWindow):
         num_points = self.current_contour_points.GetNumberOfPoints()
 
         if num_points < 2:
-            # 少于2个点不渲染
             self.polydata_2d.SetPoints(self.current_contour_points)
             self.polydata_2d.SetLines(vtk.vtkCellArray())
             self.polydata_2d.SetPolys(vtk.vtkCellArray())
         else:
-            # ==== 核心部分：实时平滑闭合曲线 ====
-            # 1. 用ParametricSpline插值（自动闭合）
             spline = vtk.vtkParametricSpline()
             points_for_spline = vtk.vtkPoints()
-
-            # 先收集原始点，再补上首点实现闭合
             for i in range(num_points):
                 points_for_spline.InsertNextPoint(self.current_contour_points.GetPoint(i))
             points_for_spline.InsertNextPoint(self.current_contour_points.GetPoint(0))  # 闭合
-
             spline.SetPoints(points_for_spline)
             splineSource = vtk.vtkParametricFunctionSource()
             splineSource.SetParametricFunction(spline)
-            splineSource.SetUResolution(200)   # 插值点数，越大越平滑
+            splineSource.SetUResolution(200)
             splineSource.Update()
-
-            # 2. 将插值结果（折线）copy到polydata_2d
             self.polydata_2d.ShallowCopy(splineSource.GetOutput())
-            # 保证点集也是插值后的点（仅用于显示，原始点用 self.current_contour_points 保留）
 
         self.polydata_2d.Modified()
-
-        # 3D视图同步显示
         self.polydata_3d.DeepCopy(self.polydata_2d)
         self.polydata_3d.Modified()
 
-        # 触发渲染刷新
-        self.slice_widget_axial.vtk_widget.GetRenderWindow().Render()
-        self.vtk_widget_3d.GetRenderWindow().Render()
-
-        # 渲染小方块（例如正方体或小球）
+        # 渲染小cube点
         cube = vtk.vtkCubeSource()
-        size = 0.1  # cube边长，根据spacing调
+        size = 0.1
         cube.SetCenter(*pos)
         cube.SetXLength(size)
         cube.SetYLength(size)
@@ -515,26 +546,14 @@ class VTIViewer(QMainWindow):
         cube_mapper.SetInputConnection(cube.GetOutputPort())
         cube_actor = vtk.vtkActor()
         cube_actor.SetMapper(cube_mapper)
-        cube_actor.GetProperty().SetColor(1, 0, 0)  # 红色
-
+        cube_actor.GetProperty().SetColor(1, 0, 0)
         self.slice_widget_axial.renderer.AddActor(cube_actor)
-        self.contour_point_actors_2d.append(cube_actor)
+        self.current_contour_cubes.append(cube_actor)   # <--- 新增，用于后续管理
 
-        self.slice_widget_axial.vtk_widget.GetRenderWindow().Render()
-
-        self.polydata_2d.Modified()
-        if self.current_contour_actor_2d:
-            self.current_contour_actor_2d.Modified()
-
-        self.polydata_3d.DeepCopy(self.polydata_2d)
-        self.polydata_3d.Modified()
-        if self.current_contour_actor_3d:
-            self.current_contour_actor_3d.Modified()
-
-        # 触发渲染刷新
-        self.slice_widget_axial.renderer.ResetCameraClippingRange()  # 只更新裁剪面
+        self.slice_widget_axial.renderer.ResetCameraClippingRange()
         self.slice_widget_axial.vtk_widget.GetRenderWindow().Render()
         self.vtk_widget_3d.GetRenderWindow().Render()
+
 
 
 

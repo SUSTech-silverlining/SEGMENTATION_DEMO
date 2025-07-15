@@ -234,6 +234,13 @@ class VTIViewer(QMainWindow):
         self.calc_btn.clicked.connect(self.on_calculate)
         top_controls_layout.addWidget(self.calc_btn)
 
+        # === 新增vti文件on/off功能 ===
+        self.vti_toggle_btn = QPushButton("Hide VTI")
+        self.vti_toggle_btn.setCheckable(True)
+        self.vti_toggle_btn.toggled.connect(self.toggle_vti_in_3d)
+        top_controls_layout.addWidget(self.vti_toggle_btn)
+
+
 
         # === 视图区 (2x2 网格) ===
         views_layout = QGridLayout()
@@ -658,6 +665,21 @@ class VTIViewer(QMainWindow):
 
         # 步进到下一个
         self.vtp_file_index += 1
+
+    def toggle_vti_in_3d(self, checked):
+        """
+        切换 VTI 显示 on/off。checked=True时隐藏，False时显示
+        """
+        # 控制三个切面actor的显示与否
+        for actor in [self.image_slice_3d_axial, self.image_slice_3d_coronal, self.image_slice_3d_sagittal]:
+            actor.SetVisibility(not checked)
+        # 更新按钮文字
+        if checked:
+            self.vti_toggle_btn.setText("Show VTI")
+        else:
+            self.vti_toggle_btn.setText("Hide VTI")
+        self.vtk_widget_3d.GetRenderWindow().Render()
+
 
 
 

@@ -19,7 +19,6 @@ class ContourInteractorStyle(vtk.vtkInteractorStyleImage):
 
     def on_left_button_press(self, obj, event):
         if not self.parent_viewer or not self.parent_viewer.is_drawing:
-            # 事件传递给基类默认处理
             self.OnLeftButtonDown()
             return
 
@@ -27,10 +26,19 @@ class ContourInteractorStyle(vtk.vtkInteractorStyleImage):
         renderer = self.GetDefaultRenderer()
         picker = vtk.vtkPropPicker()
         picker.Pick(click_pos[0], click_pos[1], 0, renderer)
-        world_pos = picker.GetPickPosition()
-        print(f"Picked point at {world_pos}")
-        self.parent_viewer.add_contour_point(world_pos)
+        world_pos = list(picker.GetPickPosition())
 
+        # 强制Z值为当前axial切片的物理坐标
+        if self.parent_viewer and hasattr(self.parent_viewer, "slider_axial"):
+            axial_slice = self.parent_viewer.slider_axial.value()
+            image_data = self.parent_viewer.image_data
+            if image_data:
+                origin = image_data.GetOrigin()
+                spacing = image_data.GetSpacing()
+                world_pos[2] = origin[2] + axial_slice * spacing[2]
+
+        print(f"Picked point at {world_pos}")
+        self.parent_viewer.add_contour_point(tuple(world_pos))
         self.OnLeftButtonDown()  # 让基类继续处理事件
 
 # ==============================================================================
@@ -117,9 +125,13 @@ class ImageSliceViewerWidget(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.vtk_widget)
 
+        self.camera_reset_done = False
+
+
     def set_input_data(self, image_data):
         """设置输入的体数据。"""
         self.reslice.SetInputData(image_data)
+        self.camera_reset_done = False
             
     def set_color_level(self, level):
         self.image_slice.GetProperty().SetColorLevel(level)
@@ -171,8 +183,11 @@ class ImageSliceViewerWidget(QWidget):
 
         self.reslice.SetResliceAxes(reslice_axes)
         self.reslice.Update()
-        
-        self.renderer.ResetCamera()
+
+        if not hasattr(self, "camera_reset_done") or not self.camera_reset_done:
+            self.renderer.ResetCamera()
+            self.camera_reset_done = True
+
         self.vtk_widget.GetRenderWindow().Render()
 
 # ==============================================================================
@@ -194,6 +209,8 @@ class VTIViewer(QMainWindow):
         self.central_widget = QWidget()
         self.setCentralWidget(self.central_widget)
         self.main_layout = QVBoxLayout(self.central_widget)
+
+        self.contour_point_actors_2d = [] 
 
         # === 顶部控制区 ===
         top_controls_layout = QHBoxLayout()
@@ -504,6 +521,21 @@ class VTIViewer(QMainWindow):
         self.contour_point_actors_2d.append(cube_actor)
 
         self.slice_widget_axial.vtk_widget.GetRenderWindow().Render()
+
+        self.polydata_2d.Modified()
+        if self.current_contour_actor_2d:
+            self.current_contour_actor_2d.Modified()
+
+        self.polydata_3d.DeepCopy(self.polydata_2d)
+        self.polydata_3d.Modified()
+        if self.current_contour_actor_3d:
+            self.current_contour_actor_3d.Modified()
+
+        # 触发渲染刷新
+        self.slice_widget_axial.renderer.ResetCameraClippingRange()  # 只更新裁剪面
+        self.slice_widget_axial.vtk_widget.GetRenderWindow().Render()
+        self.vtk_widget_3d.GetRenderWindow().Render()
+
 
 
 

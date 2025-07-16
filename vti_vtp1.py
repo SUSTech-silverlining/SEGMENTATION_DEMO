@@ -112,6 +112,7 @@ class ImageSliceViewerWidget(QWidget):
         self.image_slice = vtk.vtkImageSlice()
         self.image_slice.SetMapper(mapper)
         self.renderer.AddActor(self.image_slice)
+        
 
         camera = self.renderer.GetActiveCamera()
         camera.SetParallelProjection(True)
@@ -318,10 +319,10 @@ class VTIViewer(QMainWindow):
 
         # === 预先存好后期要用的vtp文件 ===
         self.vtp_file_list = [
-            "D:/HuaweiMoveData/Users/lyxx01/Desktop/ISURE/segmentation_demo/Aorta.vtp",
-            "D:/HuaweiMoveData/Users/lyxx01/Desktop/ISURE/segmentation_demo/BiachioA.vtp",
-            "D:/path/to/vtp3.vtp",
-            # ...依次写全你要展示的顺序
+            "D:/HuaweiMoveData/Users/lyxx01/Desktop/ISURE/segmentation_demo/vtp/ensemble_nc1_moved.vtp",
+            "D:/HuaweiMoveData/Users/lyxx01/Desktop/ISURE/segmentation_demo/vtp/ensemble_nc2_moved.vtp",
+            "D:/HuaweiMoveData/Users/lyxx01/Desktop/ISURE/segmentation_demo/vtp/ensemble_nc3_moved.vtp",
+            "D:/HuaweiMoveData/Users/lyxx01/Desktop/ISURE/segmentation_demo/vtp/ensemble_nc4_moved.vtp"
         ]
         self.current_vtp_actor = None
         self.vtp_file_index = 0  # 用于控制当前步骤显示哪个vtp
@@ -507,7 +508,7 @@ class VTIViewer(QMainWindow):
             self.current_contour_actor_3d = vtk.vtkActor()
             self.current_contour_actor_3d.SetMapper(mapper3d)
             self.current_contour_actor_3d.GetProperty().SetColor(1, 1, 0)
-            self.current_contour_actor_3d.GetProperty().SetLineWidth(2)
+            self.current_contour_actor_3d.GetProperty().SetLineWidth(4)
             self.renderer_3d.AddActor(self.current_contour_actor_3d)
 
         else:
@@ -531,13 +532,21 @@ class VTIViewer(QMainWindow):
 
 
     def add_contour_point(self, pos):
-        """向当前轮廓添加一个点，并实时更新平滑闭合轮廓。"""
         if not self.is_drawing or not self.current_contour_points:
             return
+        spacing = self.image_data.GetSpacing() if self.image_data else [1, 1, 1]
+        origin = self.image_data.GetOrigin() if self.image_data else [0, 0, 0]
+        current_slice = self.slider_axial.value()
+        slice_z = origin[2] + current_slice * spacing[2]
+        # 2D窗口要浮高
+        contour_z_2d = slice_z + spacing[2] * 20
 
-        self.current_contour_points.InsertNextPoint(pos)
+        # === 1. 2D窗口的点，z浮高
+        adjusted_pos_2d = (pos[0], pos[1], contour_z_2d)
+        self.current_contour_points.InsertNextPoint(adjusted_pos_2d)
         num_points = self.current_contour_points.GetNumberOfPoints()
 
+        # 2D线条
         if num_points < 2:
             self.polydata_2d.SetPoints(self.current_contour_points)
             self.polydata_2d.SetLines(vtk.vtkCellArray())
@@ -547,38 +556,74 @@ class VTIViewer(QMainWindow):
             points_for_spline = vtk.vtkPoints()
             for i in range(num_points):
                 points_for_spline.InsertNextPoint(self.current_contour_points.GetPoint(i))
-            points_for_spline.InsertNextPoint(self.current_contour_points.GetPoint(0))  # 闭合
+            points_for_spline.InsertNextPoint(self.current_contour_points.GetPoint(0))
             spline.SetPoints(points_for_spline)
             splineSource = vtk.vtkParametricFunctionSource()
             splineSource.SetParametricFunction(spline)
             splineSource.SetUResolution(200)
             splineSource.Update()
             self.polydata_2d.ShallowCopy(splineSource.GetOutput())
-
         self.polydata_2d.Modified()
-        self.polydata_3d.DeepCopy(self.polydata_2d)
-        self.polydata_3d.Modified()
 
-        # 渲染小cube点
+        # 2D cube
         cube = vtk.vtkCubeSource()
-        size = 0.1
-        cube.SetCenter(*pos)
+        size = 3
+        cube.SetCenter(*adjusted_pos_2d)
         cube.SetXLength(size)
         cube.SetYLength(size)
         cube.SetZLength(size)
         cube.Update()
-
         cube_mapper = vtk.vtkPolyDataMapper()
         cube_mapper.SetInputConnection(cube.GetOutputPort())
         cube_actor = vtk.vtkActor()
         cube_actor.SetMapper(cube_mapper)
         cube_actor.GetProperty().SetColor(1, 0, 0)
+        cube_actor.GetProperty().SetOpacity(1.0)
         self.slice_widget_axial.renderer.AddActor(cube_actor)
-        self.current_contour_cubes.append(cube_actor)   # <--- 新增，用于后续管理
+        self.current_contour_cubes.append(cube_actor)
 
+        # 2D线actor
+        if self.current_contour_actor_2d:
+            self.current_contour_actor_2d.GetProperty().SetColor(1, 1, 0)
+            self.current_contour_actor_2d.GetProperty().SetLineWidth(3)
+            self.current_contour_actor_2d.GetProperty().SetOpacity(1.0)
+            self.slice_widget_axial.renderer.AddActor(self.current_contour_actor_2d)
+
+        # === 2. 3D窗口的线，z严格用slice_z（即真实物理z），不要浮高 ===
+        # 直接重新生成polydata，z为slice_z
+        num_points_3d = num_points
+        points_3d = vtk.vtkPoints()
+        for i in range(num_points_3d):
+            pt = self.current_contour_points.GetPoint(i)
+            pt_3d = (pt[0], pt[1], slice_z)  # 强制用slice物理z
+            points_3d.InsertNextPoint(pt_3d)
+        # 闭合
+        if num_points_3d > 1:
+            pt = self.current_contour_points.GetPoint(0)
+            pt_3d = (pt[0], pt[1], slice_z)
+            points_3d.InsertNextPoint(pt_3d)
+        polydata_3d = vtk.vtkPolyData()
+        polydata_3d.SetPoints(points_3d)
+        if num_points_3d > 1:
+            lines = vtk.vtkCellArray()
+            n = num_points_3d + 1  # 闭合
+            lines.InsertNextCell(n)
+            for i in range(n):
+                lines.InsertCellPoint(i)
+            polydata_3d.SetLines(lines)
+        self.polydata_3d.DeepCopy(polydata_3d)
+        self.polydata_3d.Modified()
+
+        # 3D线actor已经在renderer_3d中，无需重复add
         self.slice_widget_axial.renderer.ResetCameraClippingRange()
         self.slice_widget_axial.vtk_widget.GetRenderWindow().Render()
         self.vtk_widget_3d.GetRenderWindow().Render()
+
+
+
+
+
+
 
 
 
@@ -656,8 +701,8 @@ class VTIViewer(QMainWindow):
         vtp_mapper.SetInputData(polydata)
         vtp_actor = vtk.vtkActor()
         vtp_actor.SetMapper(vtp_mapper)
-        vtp_actor.GetProperty().SetColor(0, 1, 0)
-        vtp_actor.GetProperty().SetOpacity(0.5)
+        vtp_actor.GetProperty().SetColor(0.5, 0.5, 0.5) # 灰色
+        vtp_actor.GetProperty().SetOpacity(0.3) # 透明度
         self.renderer_3d.AddActor(vtp_actor)
         self.current_vtp_actor = vtp_actor
 

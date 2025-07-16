@@ -279,13 +279,24 @@ class VTIViewer(QMainWindow):
         # 3D视图（右下）
         self.vtk_widget_3d = QVTKRenderWindowInteractor()
         self.renderer_3d = vtk.vtkRenderer()
-        self.renderer_3d.SetBackground(0.2, 0.3, 0.4)
+        self.renderer_3d.SetBackground(0.7, 0.7, 0.7)
         self.vtk_widget_3d.GetRenderWindow().AddRenderer(self.renderer_3d)
         self.interactor_3d = self.vtk_widget_3d.GetRenderWindow().GetInteractor()
         self.interactor_3d.SetInteractorStyle(vtk.vtkInteractorStyleTrackballCamera())
 
+        # 设置三个2D视图为同样的淡灰色背景
+        for w in [self.slice_widget_axial, self.slice_widget_coronal, self.slice_widget_sagittal]:
+            w.renderer.SetBackground(0.7, 0.7, 0.7)
+
+
         # === 添加小坐标轴到3D窗口 ===
         axes_actor = vtk.vtkAxesActor()
+        # 加粗
+        axes_actor.GetXAxisShaftProperty().SetLineWidth(4)
+        axes_actor.GetYAxisShaftProperty().SetLineWidth(4)
+        axes_actor.GetZAxisShaftProperty().SetLineWidth(4)
+
+
         self.orientation_marker = vtk.vtkOrientationMarkerWidget()
         self.orientation_marker.SetOrientationMarker(axes_actor)
         self.orientation_marker.SetInteractor(self.interactor_3d)
@@ -328,22 +339,56 @@ class VTIViewer(QMainWindow):
         self.vtp_file_index = 0  # 用于控制当前步骤显示哪个vtp
 
 
-
-
     def setup_controls_ui(self):
         """创建滑块控制面板。"""
         self.controls_group = QGroupBox("Slice Controls")
         layout = QFormLayout(self.controls_group)
-        self.slider_axial, self.label_axial = QSlider(Qt.Horizontal), QLabel("N/A")
-        self.slider_coronal, self.label_coronal = QSlider(Qt.Horizontal), QLabel("N/A")
-        self.slider_sagittal, self.label_sagittal = QSlider(Qt.Horizontal), QLabel("N/A")
+        
+        # Axial
+        self.slider_axial = QSlider(Qt.Horizontal)
+        self.label_axial_min = QLabel("N/A")
+        self.label_axial_max = QLabel("N/A")
+        self.label_axial_value = QLabel("N/A")
+        axial_layout = QHBoxLayout()
+        axial_layout.addWidget(self.label_axial_min)
+        axial_layout.addWidget(self.slider_axial)
+        axial_layout.addWidget(self.label_axial_max)
+        axial_layout.addWidget(QLabel("Current:"))
+        axial_layout.addWidget(self.label_axial_value)
+        layout.addRow("Axial (Z):", axial_layout)
+
+        # Coronal
+        self.slider_coronal = QSlider(Qt.Horizontal)
+        self.label_coronal_min = QLabel("N/A")
+        self.label_coronal_max = QLabel("N/A")
+        self.label_coronal_value = QLabel("N/A")
+        coronal_layout = QHBoxLayout()
+        coronal_layout.addWidget(self.label_coronal_min)
+        coronal_layout.addWidget(self.slider_coronal)
+        coronal_layout.addWidget(self.label_coronal_max)
+        coronal_layout.addWidget(QLabel("Current:"))
+        coronal_layout.addWidget(self.label_coronal_value)
+        layout.addRow("Coronal (Y):", coronal_layout)
+
+        # Sagittal
+        self.slider_sagittal = QSlider(Qt.Horizontal)
+        self.label_sagittal_min = QLabel("N/A")
+        self.label_sagittal_max = QLabel("N/A")
+        self.label_sagittal_value = QLabel("N/A")
+        sagittal_layout = QHBoxLayout()
+        sagittal_layout.addWidget(self.label_sagittal_min)
+        sagittal_layout.addWidget(self.slider_sagittal)
+        sagittal_layout.addWidget(self.label_sagittal_max)
+        sagittal_layout.addWidget(QLabel("Current:"))
+        sagittal_layout.addWidget(self.label_sagittal_value)
+        layout.addRow("Sagittal (X):", sagittal_layout)
+
+        # 滑块信号连接
         self.slider_axial.valueChanged.connect(self.update_slices)
         self.slider_coronal.valueChanged.connect(self.update_slices)
         self.slider_sagittal.valueChanged.connect(self.update_slices)
-        layout.addRow("Axial (Z-axis):", self.slider_axial)
-        layout.addRow("Coronal (Y-axis):", self.slider_coronal)
-        layout.addRow("Sagittal (X-axis):", self.slider_sagittal)
         self.controls_group.setEnabled(False)
+
 
     def open_vti(self):
         """打开VTI文件。"""
@@ -449,10 +494,15 @@ class VTIViewer(QMainWindow):
                 self.slice_widget_axial.renderer.AddActor(cube)
         # 3D窗口什么都不做（actor已经永久add过了）
 
-        # --------- 4. 其它视图和label ---------
-        self.label_axial.setText(str(axial_slice))
-        self.label_coronal.setText(str(coronal_slice))
-        self.label_sagittal.setText(str(sagittal_slice))
+        # --------- 4. 更新物理坐标label ---------
+        origin = self.image_data.GetOrigin()
+        spacing = self.image_data.GetSpacing()
+        axial_coord = origin[2] + axial_slice * spacing[2]
+        coronal_coord = origin[1] + coronal_slice * spacing[1]
+        sagittal_coord = origin[0] + sagittal_slice * spacing[0]
+        self.label_axial_value.setText(f"{axial_coord:.2f} (slice: {axial_slice})")
+        self.label_coronal_value.setText(f"{coronal_coord:.2f} (slice: {coronal_slice})")
+        self.label_sagittal_value.setText(f"{sagittal_coord:.2f} (slice: {sagittal_slice})")
 
         self.image_slice_3d_axial.GetMapper().SetSliceNumber(axial_slice)
         self.image_slice_3d_coronal.GetMapper().SetSliceNumber(coronal_slice)
@@ -534,41 +584,48 @@ class VTIViewer(QMainWindow):
     def add_contour_point(self, pos):
         if not self.is_drawing or not self.current_contour_points:
             return
+
         spacing = self.image_data.GetSpacing() if self.image_data else [1, 1, 1]
         origin = self.image_data.GetOrigin() if self.image_data else [0, 0, 0]
         current_slice = self.slider_axial.value()
         slice_z = origin[2] + current_slice * spacing[2]
-        # 2D窗口要浮高
-        contour_z_2d = slice_z + spacing[2] * 20
+        contour_z_2d = slice_z + spacing[2] * 20  # 2D的z浮高
 
-        # === 1. 2D窗口的点，z浮高
-        adjusted_pos_2d = (pos[0], pos[1], contour_z_2d)
-        self.current_contour_points.InsertNextPoint(adjusted_pos_2d)
+        # 1. 存原始点到 self.current_contour_points
+        self.current_contour_points.InsertNextPoint(pos)
         num_points = self.current_contour_points.GetNumberOfPoints()
 
-        # 2D线条
-        if num_points < 2:
-            self.polydata_2d.SetPoints(self.current_contour_points)
+        # 2. 刷新 2D 轮廓（平滑闭合, z 浮高）
+        if num_points >= 2:
+            spline2d = vtk.vtkParametricSpline()
+            points_2d = vtk.vtkPoints()
+            for i in range(num_points):
+                pt = self.current_contour_points.GetPoint(i)
+                points_2d.InsertNextPoint(pt[0], pt[1], contour_z_2d)
+            points_2d.InsertNextPoint(self.current_contour_points.GetPoint(0)[0],
+                                    self.current_contour_points.GetPoint(0)[1],
+                                    contour_z_2d)  # 闭合
+            spline2d.SetPoints(points_2d)
+            splineSource2d = vtk.vtkParametricFunctionSource()
+            splineSource2d.SetParametricFunction(spline2d)
+            splineSource2d.SetUResolution(200)
+            splineSource2d.Update()
+            self.polydata_2d.ShallowCopy(splineSource2d.GetOutput())
+        else:
+            points_2d = vtk.vtkPoints()
+            pt = self.current_contour_points.GetPoint(0)
+            points_2d.InsertNextPoint(pt[0], pt[1], contour_z_2d)
+            self.polydata_2d.SetPoints(points_2d)
             self.polydata_2d.SetLines(vtk.vtkCellArray())
             self.polydata_2d.SetPolys(vtk.vtkCellArray())
-        else:
-            spline = vtk.vtkParametricSpline()
-            points_for_spline = vtk.vtkPoints()
-            for i in range(num_points):
-                points_for_spline.InsertNextPoint(self.current_contour_points.GetPoint(i))
-            points_for_spline.InsertNextPoint(self.current_contour_points.GetPoint(0))
-            spline.SetPoints(points_for_spline)
-            splineSource = vtk.vtkParametricFunctionSource()
-            splineSource.SetParametricFunction(spline)
-            splineSource.SetUResolution(200)
-            splineSource.Update()
-            self.polydata_2d.ShallowCopy(splineSource.GetOutput())
         self.polydata_2d.Modified()
+
+        # 2D线actor已自动刷新，不需重复add（初始化时已add）
 
         # 2D cube
         cube = vtk.vtkCubeSource()
-        size = 3
-        cube.SetCenter(*adjusted_pos_2d)
+        size = 2
+        cube.SetCenter(pos[0], pos[1], contour_z_2d)
         cube.SetXLength(size)
         cube.SetYLength(size)
         cube.SetZLength(size)
@@ -582,49 +639,35 @@ class VTIViewer(QMainWindow):
         self.slice_widget_axial.renderer.AddActor(cube_actor)
         self.current_contour_cubes.append(cube_actor)
 
-        # 2D线actor
-        if self.current_contour_actor_2d:
-            self.current_contour_actor_2d.GetProperty().SetColor(1, 1, 0)
-            self.current_contour_actor_2d.GetProperty().SetLineWidth(3)
-            self.current_contour_actor_2d.GetProperty().SetOpacity(1.0)
-            self.slice_widget_axial.renderer.AddActor(self.current_contour_actor_2d)
-
-        # === 2. 3D窗口的线，z严格用slice_z（即真实物理z），不要浮高 ===
-        # 直接重新生成polydata，z为slice_z
-        num_points_3d = num_points
-        points_3d = vtk.vtkPoints()
-        for i in range(num_points_3d):
-            pt = self.current_contour_points.GetPoint(i)
-            pt_3d = (pt[0], pt[1], slice_z)  # 强制用slice物理z
-            points_3d.InsertNextPoint(pt_3d)
-        # 闭合
-        if num_points_3d > 1:
+        # 3. 刷新 3D 轮廓（平滑闭合, z=物理z）
+        if num_points >= 2:
+            spline3d = vtk.vtkParametricSpline()
+            points_3d = vtk.vtkPoints()
+            for i in range(num_points):
+                pt = self.current_contour_points.GetPoint(i)
+                points_3d.InsertNextPoint(pt[0], pt[1], slice_z)
+            points_3d.InsertNextPoint(self.current_contour_points.GetPoint(0)[0],
+                                    self.current_contour_points.GetPoint(0)[1],
+                                    slice_z)  # 闭合
+            spline3d.SetPoints(points_3d)
+            splineSource3d = vtk.vtkParametricFunctionSource()
+            splineSource3d.SetParametricFunction(spline3d)
+            splineSource3d.SetUResolution(200)
+            splineSource3d.Update()
+            self.polydata_3d.ShallowCopy(splineSource3d.GetOutput())
+        else:
+            points_3d = vtk.vtkPoints()
             pt = self.current_contour_points.GetPoint(0)
-            pt_3d = (pt[0], pt[1], slice_z)
-            points_3d.InsertNextPoint(pt_3d)
-        polydata_3d = vtk.vtkPolyData()
-        polydata_3d.SetPoints(points_3d)
-        if num_points_3d > 1:
-            lines = vtk.vtkCellArray()
-            n = num_points_3d + 1  # 闭合
-            lines.InsertNextCell(n)
-            for i in range(n):
-                lines.InsertCellPoint(i)
-            polydata_3d.SetLines(lines)
-        self.polydata_3d.DeepCopy(polydata_3d)
+            points_3d.InsertNextPoint(pt[0], pt[1], slice_z)
+            self.polydata_3d.SetPoints(points_3d)
+            self.polydata_3d.SetLines(vtk.vtkCellArray())
+            self.polydata_3d.SetPolys(vtk.vtkCellArray())
         self.polydata_3d.Modified()
 
-        # 3D线actor已经在renderer_3d中，无需重复add
+        # 刷新显示
         self.slice_widget_axial.renderer.ResetCameraClippingRange()
         self.slice_widget_axial.vtk_widget.GetRenderWindow().Render()
         self.vtk_widget_3d.GetRenderWindow().Render()
-
-
-
-
-
-
-
 
 
     def clear_current_contour(self):
@@ -659,7 +702,7 @@ class VTIViewer(QMainWindow):
 
 
         # 2. 显示进度条（假装计算5s）
-        self.progress = QProgressDialog("正在计算...", None, 0, 100, self)
+        self.progress = QProgressDialog("Calculating...", None, 0, 100, self)
         self.progress.setWindowTitle("Processing")
         self.progress.setWindowModality(Qt.WindowModal)
         self.progress.setAutoClose(True)
@@ -681,7 +724,7 @@ class VTIViewer(QMainWindow):
     def load_vtp_after_calc(self):
         # 1. 自动读取当前索引的VTP文件
         if self.vtp_file_index >= len(self.vtp_file_list):
-            QMessageBox.information(self, "Info", "已无更多VTP文件。")
+            QMessageBox.information(self, "Info", "over")
             return
         vtp_path = self.vtp_file_list[self.vtp_file_index]
 
@@ -690,7 +733,7 @@ class VTIViewer(QMainWindow):
         reader.Update()
         polydata = reader.GetOutput()
         if not polydata or polydata.GetNumberOfPoints() == 0:
-            QMessageBox.critical(self, "Error", f"VTP文件读取失败: {vtp_path}")
+            QMessageBox.critical(self, "Error", f"VTP eror: {vtp_path}")
             return
 
         # 替换上一个VTP显示

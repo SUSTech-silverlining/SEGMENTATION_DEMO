@@ -284,6 +284,14 @@ class VTIViewer(QMainWindow):
         self.interactor_3d = self.vtk_widget_3d.GetRenderWindow().GetInteractor()
         self.interactor_3d.SetInteractorStyle(vtk.vtkInteractorStyleTrackballCamera())
 
+        viewer3d_group = QWidget()
+        viewer3d_layout = QVBoxLayout(viewer3d_group)
+        viewer3d_layout.setContentsMargins(0, 0, 0, 0)
+        viewer3d_label = QLabel("3D View")
+        viewer3d_label.setAlignment(Qt.AlignHCenter)
+        viewer3d_layout.addWidget(viewer3d_label)
+        viewer3d_layout.addWidget(self.vtk_widget_3d)
+
         # 设置三个2D视图为同样的淡灰色背景
         for w in [self.slice_widget_axial, self.slice_widget_coronal, self.slice_widget_sagittal]:
             w.renderer.SetBackground(0.7, 0.7, 0.7)
@@ -308,7 +316,7 @@ class VTIViewer(QMainWindow):
         views_layout.addWidget(axial_group,    0, 0)
         views_layout.addWidget(coronal_group,  0, 1)
         views_layout.addWidget(sagittal_group, 1, 0)
-        views_layout.addWidget(self.vtk_widget_3d, 1, 1)
+        views_layout.addWidget(viewer3d_group, 1, 1) 
         self.main_layout.addLayout(views_layout)
 
         # 3D视图中的切面对象（你原有代码保留）
@@ -389,6 +397,43 @@ class VTIViewer(QMainWindow):
         self.slider_sagittal.valueChanged.connect(self.update_slices)
         self.controls_group.setEnabled(False)
 
+    def show_actual_rotation_center_marker(self):
+        """在3D窗口显示实际旋转中心（即Camera FocalPoint）的小球"""
+        camera = self.renderer_3d.GetActiveCamera()
+        focal_point = camera.GetFocalPoint()
+
+        # 防止重复添加
+        if hasattr(self, "_actual_rotation_center_actor") and self._actual_rotation_center_actor:
+            self.renderer_3d.RemoveActor(self._actual_rotation_center_actor)
+
+        # 球体
+        sphere = vtk.vtkSphereSource()
+        sphere.SetCenter(*focal_point)
+        # 球的尺寸设置为全局2%
+        if self.image_data:
+            bounds = self.image_data.GetBounds()
+            max_dim = max(bounds[1]-bounds[0], bounds[3]-bounds[2], bounds[5]-bounds[4])
+            radius = max_dim * 0.02
+        else:
+            radius = 5
+        sphere.SetRadius(radius)
+        sphere.SetThetaResolution(32)
+        sphere.SetPhiResolution(32)
+
+        mapper = vtk.vtkPolyDataMapper()
+        mapper.SetInputConnection(sphere.GetOutputPort())
+        actor = vtk.vtkActor()
+        actor.SetMapper(mapper)
+        actor.GetProperty().SetColor(0, 1, 0)  # 绿色，和数据中心区分
+
+        self.renderer_3d.AddActor(actor)
+        self._actual_rotation_center_actor = actor
+
+        self.vtk_widget_3d.GetRenderWindow().Render()
+
+
+
+
 
     def open_vti(self):
         """打开VTI文件。"""
@@ -459,6 +504,33 @@ class VTIViewer(QMainWindow):
         
         self.controls_group.setEnabled(True)
         self.update_slices()
+
+        # ====== 修正3D视图相机的旋转中心为center ======
+        center = self.image_data.GetCenter()
+        bounds = self.image_data.GetBounds()
+        camera = self.renderer_3d.GetActiveCamera() 
+        camera.SetFocalPoint(*center)
+
+
+
+        # 根据数据尺寸合理拉开摄像机
+        # 这里设置相机在z轴正向，距离center一段距离
+        max_dim = 1.5*max(bounds[1]-bounds[0], bounds[3]-bounds[2], bounds[5]-bounds[4])
+        camera.SetPosition(
+            center[0] + max_dim,
+            center[1] + max_dim,
+            center[2] + max_dim
+        )
+        camera.SetFocalPoint(*center)
+        camera.SetViewUp(0, 0, 1)  # 保证z轴朝上
+
+
+        self.renderer_3d.ResetCameraClippingRange()
+        self.vtk_widget_3d.GetRenderWindow().Render()
+
+        # self.show_actual_rotation_center_marker()  # 显示实际旋转中心的小球
+
+
 
     def update_slices(self):
         if not self.image_data:
